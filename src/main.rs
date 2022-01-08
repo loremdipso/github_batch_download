@@ -138,26 +138,37 @@ async fn get_repo_urls(options: &Options) -> Result<LinkedHashSet<String>, Box<d
 		.await?;
 
 	let mut urls = LinkedHashSet::new();
-	while let Some(page) = octocrab.get_page::<models::Repository>(&page.next).await? {
-		for item in page.items {
-			if let Some(url) = item.clone_url {
-				let url = url.to_string();
-				if urls.contains(&url) {
-					info!("Skipping {} because we've already seen it", &url);
-					continue;
-				}
+	loop {
+		match octocrab.get_page::<models::Repository>(&page.next).await {
+			Ok(Some(page)) => {
+				for item in page.items {
+					if let Some(url) = item.clone_url {
+						let url = url.to_string();
+						if urls.contains(&url) {
+							info!("Skipping {} because we've already seen it", &url);
+							continue;
+						}
 
-				if !options.no_download && get_target(&url, &options.output).exists() {
-					info!("Skipping {} because we already have it", &url);
-					continue;
-				}
+						if !options.no_download && get_target(&url, &options.output).exists() {
+							info!("Skipping {} because we already have it", &url);
+							continue;
+						}
 
-				urls.insert(url);
-				if urls.len() >= options.limit {
-					return Ok(urls);
+						urls.insert(url);
+						if urls.len() >= options.limit {
+							return Ok(urls);
+						}
+					}
 				}
 			}
+			Ok(None) => {
+				info!("Ran out of pages before we found enough matching urls");
+				return Ok(urls);
+			}
+			Err(e) => {
+				error!("Encountered error before we found enough matching urls: {}", e);
+				return Ok(urls);
+			}
 		}
-	}
-	Ok(urls)
+	};
 }
