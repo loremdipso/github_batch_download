@@ -44,8 +44,8 @@ struct Options {
     #[structopt(long, default_value = "5")]
     max_tries: usize,
 
-    /// How many seconds should we wait between tries? Defaults to 5
-    #[structopt(long, default_value = "5")]
+    /// How many seconds should we wait between tries? Defaults to 10
+    #[structopt(long, default_value = "10")]
     retry_delay: usize,
 
     /// Show verbose output
@@ -175,7 +175,7 @@ async fn get_repo_urls(options: &Options) -> Result<LinkedHashSet<String>, Box<d
 			}
 
 			tries += 1;
-			if tries >= options.max_tries {
+			if tries > options.max_tries {
 				info!("Exceeded max tries. Exiting early");
 				return Ok(urls);
 			} else {
