@@ -1,9 +1,11 @@
 #![allow(unused_imports, unused_mut, unused_variables, dead_code, unreachable_code)]
 extern crate linked_hash_set;
+use octocrab::Page;
 use tokio::task::JoinHandle;
 use linked_hash_set::LinkedHashSet;
 use std::error::Error;
 use structopt::StructOpt;
+use octocrab::Octocrab;
 use octocrab::{models, params, repos::RepoHandler};
 use std::{fs, path::PathBuf};
 use log::{info, warn, error};
@@ -12,6 +14,8 @@ use git2::Repository;
 use futures::prelude::*;
 use futures::future::{join_all, ok, err};
 use std::{thread, time};
+use std::sync::Arc;
+use dotenv;
 
 /// Search for and download repositories that match your query
 #[derive(StructOpt, Debug)]
@@ -47,6 +51,7 @@ struct Options {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+	dotenv::dotenv().ok();
 	let mut options = Options::from_args();
 
 	if options.verbose {
@@ -125,11 +130,16 @@ async fn get_repo_urls(options: &Options) -> Result<LinkedHashSet<String>, Box<d
 	for license in &options.license {
 		query.push_str(&format!(" license:{}", license));
 	}
-
 	info!("Using query: \"{}\"", &query);
 
-	let octocrab = octocrab::instance();
-	let page = octocrab
+	let octocrab = if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+		info!("Found GITHUB_TOKEN variable. Using it...");
+		Arc::new(Octocrab::builder().personal_token(token.to_string()).build()?)
+	} else {
+		octocrab::instance()
+	};
+
+	let mut page = octocrab
 		.search()
 		.repositories(&query)
 		.sort("stars")
@@ -137,29 +147,16 @@ async fn get_repo_urls(options: &Options) -> Result<LinkedHashSet<String>, Box<d
 		.send()
 		.await?;
 
-	let mut urls = LinkedHashSet::new();
 	loop {
+		let mut urls = LinkedHashSet::new();
+		if pull_items(&page, &mut urls, &options) {
+			return Ok(urls);
+		}
+
+		// try to fetch the next page
 		match octocrab.get_page::<models::Repository>(&page.next).await {
-			Ok(Some(page)) => {
-				for item in page.items {
-					if let Some(url) = item.clone_url {
-						let url = url.to_string();
-						if urls.contains(&url) {
-							info!("Skipping {} because we've already seen it", &url);
-							continue;
-						}
-
-						if !options.no_download && get_target(&url, &options.output).exists() {
-							info!("Skipping {} because we already have it", &url);
-							continue;
-						}
-
-						urls.insert(url);
-						if urls.len() >= options.limit {
-							return Ok(urls);
-						}
-					}
-				}
+			Ok(Some(next_page)) => {
+				page = next_page;
 			}
 			Ok(None) => {
 				info!("Ran out of pages before we found enough matching urls");
@@ -171,4 +168,28 @@ async fn get_repo_urls(options: &Options) -> Result<LinkedHashSet<String>, Box<d
 			}
 		}
 	};
+}
+
+// returns true if we're finished pulling items
+fn pull_items(page: &Page<models::Repository>, urls: &mut LinkedHashSet<String>, options: &Options) -> bool {
+	for item in &page.items {
+		if let Some(url) = &item.clone_url {
+			let url = url.to_string();
+			if urls.contains(&url) {
+				info!("Skipping {} because we've already seen it", &url);
+				continue;
+			}
+
+			if !options.no_download && get_target(&url, &options.output).exists() {
+				info!("Skipping {} because we already have it", &url);
+				continue;
+			}
+
+			urls.insert(url);
+			if urls.len() >= options.limit {
+				return true;
+			}
+		}
+	}
+	return false;
 }

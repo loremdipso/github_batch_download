@@ -5,6 +5,7 @@ authors = ["Michael Adams"]
 version = "0.1.0"
 
 [dependencies]
+dotenv = "0.15.0"
 futures = "0.3.19"
 git2 = "0.13.25"
 linked_hash_set = "0.1.4"
