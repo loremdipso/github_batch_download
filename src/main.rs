@@ -40,9 +40,13 @@ struct Options {
     #[structopt(long, default_value = "10")]
     limit: usize,
 
-    /// How many repos to download/list? Defaulted to 1
-    #[structopt(long, default_value = "1")]
-    threads: usize,
+    /// If we run into rate-limiting, how many times should we wait and retry? Defaulted to 5
+    #[structopt(long, default_value = "5")]
+    max_tries: usize,
+
+    /// How many seconds should we wait between tries? Defaults to 5
+    #[structopt(long, default_value = "5")]
+    retry_delay: usize,
 
     /// Show verbose output
     #[structopt(long)]
@@ -154,17 +158,33 @@ async fn get_repo_urls(options: &Options) -> Result<LinkedHashSet<String>, Box<d
 		}
 
 		// try to fetch the next page
-		match octocrab.get_page::<models::Repository>(&page.next).await {
-			Ok(Some(next_page)) => {
-				page = next_page;
+		let mut tries = 0;
+		loop {
+			match octocrab.get_page::<models::Repository>(&page.next).await {
+				Ok(Some(next_page)) => {
+					page = next_page;
+					break;
+				}
+				Ok(None) => {
+					info!("Ran out of pages before we found enough matching urls");
+					return Ok(urls);
+				}
+				Err(e) => {
+					error!("Encountered error before we found enough matching urls: {}", e);
+				}
 			}
-			Ok(None) => {
-				info!("Ran out of pages before we found enough matching urls");
+
+			tries += 1;
+			if tries >= options.max_tries {
+				info!("Exceeded max tries. Exiting early");
 				return Ok(urls);
-			}
-			Err(e) => {
-				error!("Encountered error before we found enough matching urls: {}", e);
-				return Ok(urls);
+			} else {
+				info!("Waiting {} seconds before trying again. Try {} of {}",
+					options.retry_delay,
+					tries,
+					options.max_tries
+				);
+				thread::sleep(time::Duration::from_secs(10));
 			}
 		}
 	};
